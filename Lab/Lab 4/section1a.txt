@@ -1,0 +1,18 @@
+sample 1 = 412
+sample 2 = 549
+sample 3 = 798
+
+549 - 412 = 137
+798 - 549 = 249
+
+daverage = 193
+
+chatter width 1 = 440 - 412 = 28
+chatter width 2 = 575 - 549 = 26
+chatter width 3 = 905 - 798 = 107
+
+chatter width average = 53.67
+
+sensor std = (53.67/6) * 1/193 = 0.0463
+
+std total = sqrt(0.0463^2 + 0.29^2) = 0.2937
