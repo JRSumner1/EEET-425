@@ -1,7 +1,3 @@
-// OPEN A NEW SKETCH WINDOW IN ARDUINO
-// CLICK IN THIS BOX, CTL-A, CTL-C (Copy code from text box.)
-// CLICK IN SKETCH, CTL-A, CTL-V (Paste code into sketch.)
-
 // Breathing Rate Detection System -- Final Integration
 //
 // Pieced together from code created by: Clark Hochgraf and David Orlicki Oct 18, 2018
@@ -45,7 +41,6 @@ struct stats_t
 //**********************************************************************
 void setup()
 {
-
   configureArduino();
   Serial.begin(115200);delay(5);
 
@@ -55,10 +50,9 @@ void setup()
 
   MsTimer2::set(TSAMP_MSEC, ISR_Sample); // Set sample msec, ISR name
   MsTimer2::start(); // start running the Timer  
-
 }
 
-//************************************************************************
+//**********************************************************************
 void loop()
 {
   // syncSample();  // Wait for the interupt when actually reading ADC data
@@ -98,11 +92,9 @@ void loop()
   //  Convert the output of the equalizer by scaling floating point
   // xv = float(eqOutput) * INV_FXPT;
 
-  //*******************************************************************
   // Uncomment this when measuring execution times
   startUsec = micros();
 
-  // ******************************************************************
   //  Compute the output of the filter using the cascaded SOS sections
   yLF = IIR_LPF(xv); // second order systems cascade
   yMF = IIR_BPF(xv);  
@@ -122,7 +114,6 @@ void loop()
   getStats(yHF, statsHF, statsReset);
   stdHF = statsHF.stdev;
 
-  //*******************************************************************
   // Uncomment this when measuring execution times
   endUsec = micros();
   execUsec = execUsec + (endUsec-startUsec);
@@ -133,23 +124,14 @@ void loop()
   //  Call the alarm function to turn on or off the tone
   // setAlarm(alarmCode, isToneEn );
 
-  
- // To print data to the serial port, use the WriteToSerial function.  
- //
- //  This is a generic way to print out variable number of values
- //
- //  There are two input arguments to the function:
- //  printArray -- An array of values that are to be printed starting with the first column
- //  numValues -- An integer indicating the number of values in the array.  
- 
-  printArray[0] = loopTick;  //  The sample number -- always print this
-  printArray[1] = xv;        //  Column 2
-  printArray[2] = yLF;       //  Column 3
-  printArray[3] = yMF;       //  Column 4, etc...
-  printArray[4] = yHF;
-  printArray[5] = stdLF;
-  printArray[6] = stdMF;
-  printArray[7] = stdHF;
+  printArray[0] = loopTick;  //  Sample Number
+  printArray[1] = xv;        //  Input Data
+  printArray[2] = yLF;       //  Raw Low Pass Filter
+  printArray[3] = yMF;       //  Raw Bandpass Filter
+  printArray[4] = yHF;       //  Raw High Pass Filter
+  printArray[5] = stdLF;     //  StdDev Low Pass Filter
+  printArray[6] = stdMF;     //  StdDev Bandpass Filter
+  printArray[7] = stdHF;     //  StdDev High Pass Filter
   // printArray[8] = float(alarmCode);
 
   numValues = 8;  // The number of columns to be sent to the serial monitor (or MATLAB)
@@ -163,7 +145,7 @@ void loop()
 
 } // loop()
 
-//******************************************************************
+//**********************************************************************
 int AlarmCheck( float stdLF, float stdMF, float stdHF)
 {
 
@@ -175,7 +157,7 @@ int AlarmCheck( float stdLF, float stdMF, float stdHF)
 
 }  // end AlarmCheck
 
-//*******************************************************************************
+//**********************************************************************
 long EqualizerFIR(long xInput)
 {
   int i;
@@ -206,7 +188,7 @@ long EqualizerFIR(long xInput)
   }
 }
 
-//*******************************************************************************
+//**********************************************************************
 float IIR_LPF(float xv)
 {
   const int numStages = 3;
@@ -243,7 +225,7 @@ float IIR_LPF(float xv)
   return yv;
 }
 
-//*******************************************************************************
+//**********************************************************************
 float IIR_BPF(float xv)
 {
   const int numStages = 5;
@@ -286,7 +268,7 @@ float IIR_BPF(float xv)
   return yv;
 }
 
-//*******************************************************************************
+//**********************************************************************
 float IIR_HPF(float xv)
 {
   const int numStages = 3;
@@ -323,7 +305,7 @@ float IIR_HPF(float xv)
   return yv;
 }
 
-//*******************************************************************
+//**********************************************************************
 void getStats(float xv, stats_t &s, bool reset)
 {
   float oldMean, oldVar;
@@ -345,25 +327,21 @@ void getStats(float xv, stats_t &s, bool reset)
   s.tick++;  
 }
 
-//*******************************************************************
+//**********************************************************************
 float analogReadDitherAve(void)
 { 
- 
-float sum = 0.0;
-int index;
+  float sum = 0.0;
   for (int i = 0; i < NUM_SUBSAMPLES; i++)
   {
-    index = i;
-    digitalWrite(DAC0, (index & B00000001)); // LSB bit mask
-    digitalWrite(DAC1, (index & B00000010));
-    digitalWrite(DAC2, (index & B00000100)); // MSB bit mask
+    digitalWrite(DAC0, (i & B00000001)); // LSB bit mask
+    digitalWrite(DAC1, (i & B00000010));
+    digitalWrite(DAC2, (i & B00000100)); // MSB bit mask
     sum += analogRead(LM61);
   }
   return sum/NUM_SUBSAMPLES; // averaged subsamples 
-
 }
 
-//*********************************************************************
+//**********************************************************************
 void setAlarm(int aCode, boolean isToneEn)
 {
 
@@ -371,7 +349,7 @@ void setAlarm(int aCode, boolean isToneEn)
 
 } // setBreathRateAlarm()
 
-//*************************************************************
+//**********************************************************************
 float testVector(void)
 {
   // Variable rate sinusoidal input
@@ -417,7 +395,7 @@ float testVector(void)
   return degC;
 }
 
-//*******************************************************************
+//**********************************************************************
 void configureArduino(void)
 {
   pinMode(DAC0,OUTPUT); digitalWrite(DAC0,LOW);
@@ -451,7 +429,7 @@ void WriteToSerial( int numValues, float dataArray[] )
 
 }  // end WriteToMATLAB
 
-////**********************************************************************
+//**********************************************************************
 float ReadFromMATLAB()
 {
   int charCount;
@@ -482,7 +460,7 @@ float ReadFromMATLAB()
 
 } // end ReadFromMATLAB
 
-//*******************************************************************
+//**********************************************************************
 void syncSample(void)
 {
   while (sampleFlag == false); // spin until ISR trigger
