@@ -61,6 +61,7 @@ void loop()
   float readValue, floatOutput;  //  Input data from ADC after dither averaging or from MATLAB
   long fxdInputValue, lpfInput, lpfOutput;  
   long eqOutput;  //  Equalizer output
+  long noiseOutput; // FIR Windowed Sinc Output
   int alarmCode;  //  Alarm code
 
   // ******************************************************************
@@ -69,13 +70,13 @@ void loop()
   // xv = (loopTick == 0) ? 1.0 : 0.0; // impulse test input
 
   //  Use this when the test vector generator is used as an input
-  xv = testVector();
+//  xv = testVector();
 
   //  Read input value in ADC counts  -- Get simulated data from MATLAB
-  //readValue = ReadFromMATLAB();
+  readValue = ReadFromMATLAB();
 
   //  Read input value from ADC using Dithering, and averaging
-  readValue = analogReadDitherAve();
+//  readValue = analogReadDitherAve();
 
   //  Convert the floating point number to a fixed point value.  First
   //  scale the floating point value by a number to increase its resolution
@@ -84,13 +85,13 @@ void loop()
   fxdInputValue = long(DATA_FXPT * readValue + 0.5);
 
   //  Execute the equalizer
-  eqOutput = EqualizerFIR(fxdInputValue);
+  eqOutput = EqualizerFIR( fxdInputValue );
   
   //  Execute the noise filter.  
-  // eqOutput = NoiseFilter( eqOutput, loopTick );
+  noiseOutput = NoiseFilter( eqOutput );
 
   //  Convert the output of the equalizer by scaling floating point
-  // xv = float(eqOutput) * INV_FXPT;
+  xv = float(noiseOutput) * INV_FXPT;
 
   // Uncomment this when measuring execution times
   startUsec = micros();
@@ -125,15 +126,17 @@ void loop()
 
   printArray[0] = loopTick;  //  Sample Number
   printArray[1] = xv;        //  Input Data
-  printArray[2] = yLF;       //  Raw Low Pass Filter
-  printArray[3] = yMF;       //  Raw Bandpass Filter
-  printArray[4] = yHF;       //  Raw High Pass Filter
-  printArray[5] = stdLF;     //  StdDev Low Pass Filter
-  printArray[6] = stdMF;     //  StdDev Bandpass Filter
-  printArray[7] = stdHF;     //  StdDev High Pass Filter
+  printArray[2] = eqOutput;       //  Raw Low Pass Filter
+  printArray[3] = noiseOutput;       //  Raw Bandpass Filter
+  // printArray[2] = yLF;       //  Raw Low Pass Filter
+  // printArray[3] = yMF;       //  Raw Bandpass Filter
+  // printArray[4] = yHF;       //  Raw High Pass Filter
+  // printArray[5] = stdLF;     //  StdDev Low Pass Filter
+  // printArray[6] = stdMF;     //  StdDev Bandpass Filter
+  // printArray[7] = stdHF;     //  StdDev High Pass Filter
   // printArray[8] = float(alarmCode);
 
-  numValues = 8;  // The number of columns to be sent to the serial monitor (or MATLAB)
+  numValues = 4;  // The number of columns to be sent to the serial monitor (or MATLAB)
   WriteToSerial( numValues, printArray );  //  Write to the serial monitor (or MATLAB)
 
   if (++loopTick >= NUM_SAMPLES){
@@ -185,6 +188,34 @@ long EqualizerFIR(long xInput)
   {
     return yN;
   }
+}
+
+//*******************************************************************
+int NoiseFilter(long inputX) {
+  // Filter Type: LPF
+  const int Fc_bpm = 65;
+	// LPF FIR Filter Coefficients MFILT = 61, Fc = 50
+	const int HFXPT = 4096, MFILT = 61;
+	int h[] = {0, 2, 4, 5, 5, 4, 0, -6, -12, -17, -17, -12, 0, 17,
+	35, 47, 47, 32, 0, -43, -87, -117, -119, -82, 0, 122, 270, 424,
+	558, 649, 681, 649, 558, 424, 270, 122, 0, -82, -119, -117, -87, -43,
+	0, 32, 47, 47, 35, 17, 0, -12, -17, -17, -12, -6, 0, 4,
+	5, 5, 4, 2, 0};
+
+  const float INV_HFXPT = 1.0 / HFXPT;
+  static long xN[MFILT] = {inputX};
+  long hv, accum = 0;
+
+  // Right shift old xv values. Install new x in xv[0];
+  for (int i = (MFILT-1); i > 0; i--) xv[i] = xv[i-1]; xv[0] = x;
+
+  // h[]*x[] overlap multiply-accumumlate
+  for (int i = 0; i < MFILT; i++)
+  {
+    hv = h[i]; // create 32 bit space
+    accum += hv*xv[MFILT-1-i];
+  }
+  return (accum*INV_HFXPT);
 }
 
 //**********************************************************************
