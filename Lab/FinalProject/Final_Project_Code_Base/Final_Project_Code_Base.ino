@@ -95,13 +95,12 @@ void loop()
   // Uncomment this when measuring execution times
   startUsec = micros();
 
-  //  Compute the output of the filter using the cascaded SOS sections
+  // Filter bank
   yLF = IIR_LPF(xv); // second order systems cascade
   yMF = IIR_BPF(xv);  
   yHF = IIR_HPF(xv);
 
-  //  Compute the latest output of the running stats for the output of the filters.
-  //  Pass the entire set of output values, the latest stats structure and the reset flag
+  // Determine which filter is active and its standard deviation
   statsReset = ((statsLF.tick % 100) == 0);
   getStats(yLF, statsLF, statsReset);
   stdLF = statsLF.stdev;
@@ -135,11 +134,11 @@ void loop()
   // printArray[8] = float(alarmCode);
 
   numValues = 8;  // The number of columns to be sent to the serial monitor (or MATLAB)
-
- WriteToSerial( numValues, printArray );  //  Write to the serial monitor (or MATLAB)
+  WriteToSerial( numValues, printArray );  //  Write to the serial monitor (or MATLAB)
 
   if (++loopTick >= NUM_SAMPLES){
-    Serial.print("Average execution time (uSec) = ");Serial.println( float(execUsec)/NUM_SAMPLES );
+    Serial.print("Average execution time (uSec) = ");
+    Serial.println( float(execUsec)/NUM_SAMPLES );
     while(true); // spin forever
   }
 
@@ -184,7 +183,7 @@ long EqualizerFIR(long xInput)
   }
   else
   {
-   return yN;
+    return yN;
   }
 }
 
