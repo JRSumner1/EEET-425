@@ -165,8 +165,14 @@ classdef ArduinoSerial < handle
             %
             %  Sends the string argument over the arduino serial port
             % fprintf(obj.arduinoPort, '%s\n',strValue);
+            
+            %  In previous versions prior to 2024b the terminating
+            %  character was not sent, but it is withe 2024b so don't send
+            %  it again
+            % writeline(obj.arduinoPort, sprintf('%s\n',strValue));
 
-            writeline(obj.arduinoPort, sprintf('%s\n',strValue));
+            %  For Version 24.2 Release R2024b and later
+            writeline(obj.arduinoPort, sprintf('%s',strValue));
             
         end %  WriteString
         

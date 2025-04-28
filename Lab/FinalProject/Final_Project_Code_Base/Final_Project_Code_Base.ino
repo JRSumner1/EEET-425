@@ -21,7 +21,7 @@ const float INV_FXPT = 1.0 / DATA_FXPT; // division slow: precalculate
 
 int nSmpl = 1, sample;
 
-float xv, yv, yLF, yMF, yHF, stdLF, stdMF, stdHF;
+float xv, yv, yLF, yBF, yHF, stdLF, stdBF, stdHF;
 float printArray[9];
 int numValues = 0;
 
@@ -36,7 +36,7 @@ struct stats_t
 {
   int tick = 1;
   float mean, var, stdev;
-} statsLF, statsMF, statsHF;
+} statsLF, statsBF, statsHF;
 
 //**********************************************************************
 void setup()
@@ -59,9 +59,8 @@ void loop()
   // Breathing Rate Detection
   // Declare variables
   float readValue, floatOutput;  //  Input data from ADC after dither averaging or from MATLAB
-  long fxdInputValue, lpfInput, lpfOutput;  
+  long fxdInputValue;  
   long eqOutput;  //  Equalizer output
-  long noiseOutput; // FIR Windowed Sinc Output
   int alarmCode;  //  Alarm code
 
   // ******************************************************************
@@ -70,13 +69,13 @@ void loop()
   // xv = (loopTick == 0) ? 1.0 : 0.0; // impulse test input
 
   //  Use this when the test vector generator is used as an input
-//  xv = testVector();
+  // xv = testVector();
 
   //  Read input value in ADC counts  -- Get simulated data from MATLAB
-  readValue = ReadFromMATLAB();
+  // readValue = ReadFromMATLAB();
 
   //  Read input value from ADC using Dithering, and averaging
-//  readValue = analogReadDitherAve();
+  readValue = analogReadDitherAve();
 
   //  Convert the floating point number to a fixed point value.  First
   //  scale the floating point value by a number to increase its resolution
@@ -85,20 +84,20 @@ void loop()
   fxdInputValue = long(DATA_FXPT * readValue + 0.5);
 
   //  Execute the equalizer
-  eqOutput = EqualizerFIR( fxdInputValue );
+  eqOutput = EqualizerFIR( fxdInputValue, loopTick );
   
   //  Execute the noise filter.  
-  noiseOutput = NoiseFilter( eqOutput );
+  eqOutput = NoiseFilter( eqOutput, loopTick );
 
   //  Convert the output of the equalizer by scaling floating point
-  xv = float(noiseOutput) * INV_FXPT;
+  xv = float(eqOutput);
 
   // Uncomment this when measuring execution times
   startUsec = micros();
 
   // Filter bank
   yLF = IIR_LPF(xv); // second order systems cascade
-  yMF = IIR_BPF(xv);  
+  yBF = IIR_BPF(xv);  
   yHF = IIR_HPF(xv);
 
   // Determine which filter is active and its standard deviation
@@ -106,9 +105,9 @@ void loop()
   getStats(yLF, statsLF, statsReset);
   stdLF = statsLF.stdev;
 
-  statsReset = ((statsMF.tick % 100) == 0);
-  getStats(yMF, statsMF, statsReset);
-  stdMF = statsMF.stdev;
+  statsReset = ((statsBF.tick % 100) == 0);
+  getStats(yBF, statsBF, statsReset);
+  stdBF = statsBF.stdev;
 
   statsReset = ((statsHF.tick % 100) == 0);
   getStats(yHF, statsHF, statsReset);
@@ -119,48 +118,53 @@ void loop()
   execUsec = execUsec + (endUsec-startUsec);
 
   //  Call the alarm check function to determine what breathing range 
-  // alarmCode = AlarmCheck( stdLF, stdMF, stdHF );
+  alarmCode = AlarmCheck( stdLF, stdBF, stdHF );
+
+  if (alarmCode > 0) isToneEn = true;
+  else isToneEn = false;
 
   //  Call the alarm function to turn on or off the tone
-  // setAlarm(alarmCode, isToneEn );
+  setAlarm( alarmCode, isToneEn );
 
-  printArray[0] = loopTick;  //  Sample Number
-  printArray[1] = xv;        //  Input Data
-  printArray[2] = eqOutput;       //  Raw Low Pass Filter
-  printArray[3] = noiseOutput;       //  Raw Bandpass Filter
-  // printArray[2] = yLF;       //  Raw Low Pass Filter
-  // printArray[3] = yMF;       //  Raw Bandpass Filter
-  // printArray[4] = yHF;       //  Raw High Pass Filter
-  // printArray[5] = stdLF;     //  StdDev Low Pass Filter
-  // printArray[6] = stdMF;     //  StdDev Bandpass Filter
-  // printArray[7] = stdHF;     //  StdDev High Pass Filter
-  // printArray[8] = float(alarmCode);
+  // Check for equalized noise
+  // printArray[1] = eqOutput;
 
-  numValues = 4;  // The number of columns to be sent to the serial monitor (or MATLAB)
+  printArray[0] = loopTick;     //  Sample Number
+  printArray[1] = readValue;    //  Input Data
+  printArray[2] = eqOutput;     // Equalizer Output
+  printArray[3] = yLF;          //  Raw Low Pass Filter
+  printArray[4] = yBF;          //  Raw Bandpass Filter
+  printArray[5] = yHF;          //  Raw High Pass Filter
+  printArray[6] = stdLF;        //  StdDev Low Pass Filter
+  printArray[7] = stdBF;     //  StdDev Bandpass Filter
+  printArray[8] = stdHF;     //  StdDev High Pass Filter
+  printArray[9] = float(alarmCode);
+
+  numValues = 10;  // The number of columns to be sent to the serial monitor (or MATLAB)
   WriteToSerial( numValues, printArray );  //  Write to the serial monitor (or MATLAB)
 
-  if (++loopTick >= NUM_SAMPLES){
+  if (++loopTick >= NUM_SAMPLES)
+  {
     Serial.print("Average execution time (uSec) = ");
     Serial.println( float(execUsec)/NUM_SAMPLES );
     while(true); // spin forever
   }
-
 } // loop()
 
 //**********************************************************************
-int AlarmCheck( float stdLF, float stdMF, float stdHF)
+int AlarmCheck( float stdLF, float stdBF, float stdHF)
 {
-
-
-//  Your alarm check logic code will go here.
-
-  
-//return alarmCode;
-
+  // if (stdLF > 400.0 && stdBF  400.0 && stdHF < 400.0) return 1; // Disconnect
+  if (stdLF > 60.0 || stdBF > 140.0 || stdHF > 200.0)
+  {
+    if (stdLF > stdBF && stdLF > stdHF) return 2;
+    if (stdHF > stdBF && stdHF > stdLF) return 3;
+    return 0;
+  }
 }  // end AlarmCheck
 
 //**********************************************************************
-long EqualizerFIR(long xInput)
+long EqualizerFIR(long xInput, int sampleNumber)
 {
   int i;
   long yN = 0; //  Current output
@@ -180,7 +184,7 @@ long EqualizerFIR(long xInput)
     yN += h[i] * xN[i];
   }
 
-  if (loopTick < equalizerLength)
+  if (sampleNumber < equalizerLength)
   {
     return 0;
   }
@@ -191,29 +195,29 @@ long EqualizerFIR(long xInput)
 }
 
 //*******************************************************************
-int NoiseFilter(long inputX) {
+int NoiseFilter(long xInput, int sampleNumber) {
   // Filter Type: LPF
-  const int Fc_bpm = 65;
-	// LPF FIR Filter Coefficients MFILT = 61, Fc = 50
+  const int Fc_bpm = 70;
+	// LPF FIR Filter Coefficients MFILT = 61, Fc = 70
 	const int HFXPT = 4096, MFILT = 61;
-	int h[] = {0, 2, 4, 5, 5, 4, 0, -6, -12, -17, -17, -12, 0, 17,
-	35, 47, 47, 32, 0, -43, -87, -117, -119, -82, 0, 122, 270, 424,
-	558, 649, 681, 649, 558, 424, 270, 122, 0, -82, -119, -117, -87, -43,
-	0, 32, 47, 47, 35, 17, 0, -12, -17, -17, -12, -6, 0, 4,
-	5, 5, 4, 2, 0};
+	int h[] = {0, 2, 4, 4, 1, -4, -9, -10, -6, 5, 17, 24, 17, -4,
+	-30, -47, -41, -7, 43, 84, 87, 36, -56, -150, -188, -122, 65, 343,
+	641, 869, 954, 869, 641, 343, 65, -122, -188, -150, -56, 36, 87, 84,
+	43, -7, -41, -47, -30, -4, 17, 24, 17, 5, -6, -10, -9, -4,
+	1, 4, 4, 2, 0};
 
   const float INV_HFXPT = 1.0 / HFXPT;
-  static long xN[MFILT] = {inputX};
+  static long xN[MFILT] = {xInput};
   long hv, accum = 0;
 
   // Right shift old xv values. Install new x in xv[0];
-  for (int i = (MFILT-1); i > 0; i--) xv[i] = xv[i-1]; xv[0] = x;
+  for (int i = (MFILT-1); i > 0; i--) xN[i] = xN[i-1]; xN[0] = xInput;
 
   // h[]*x[] overlap multiply-accumumlate
   for (int i = 0; i < MFILT; i++)
   {
-    hv = h[i]; // create 32 bit space
-    accum += hv*xv[MFILT-1-i];
+      hv = h[i]; // create 32 bit space
+      accum += hv*xN[MFILT-1-i];
   }
   return (accum*INV_HFXPT);
 }
@@ -245,12 +249,12 @@ float IIR_LPF(float xv)
   a[2][0] = 1.0000000; a[2][1] =  -1.9562202; a[2][2] =  0.9723269;
   
   for (i =0; i<numStages; i++)
-    {
-      yM2[i] = yM1[i]; yM1[i] = yM0[i];  xM2[i] = xM1[i]; xM1[i] = xM0[i], xM0[i] = G[i]*xv;
-      yv = -a[i][2]*yM2[i] - a[i][1]*yM1[i] + b[i][2]*xM2[i] + b[i][1]*xM1[i] + b[i][0]*xM0[i];
-      yM0[i] = yv;
-      xv = yv;
-    }
+  {
+    yM2[i] = yM1[i]; yM1[i] = yM0[i];  xM2[i] = xM1[i]; xM1[i] = xM0[i], xM0[i] = G[i]*xv;
+    yv = -a[i][2]*yM2[i] - a[i][1]*yM1[i] + b[i][2]*xM2[i] + b[i][1]*xM1[i] + b[i][0]*xM0[i];
+    yM0[i] = yv;
+    xv = yv;
+  }
   
   return yv;
 }
@@ -374,9 +378,39 @@ float analogReadDitherAve(void)
 //**********************************************************************
 void setAlarm(int aCode, boolean isToneEn)
 {
+  if (!isToneEn) { noTone(SPKR); return; }
 
-// Your alarm code goes here
+  static unsigned long lastToggle = 0;
+  static bool highOn = false;
 
+  switch (aCode)
+  {
+    case 1: // Disconnected
+      tone(SPKR, 200);
+      break;
+
+    case 2: // LPF
+      tone(SPKR, 400);
+      break;
+
+    case 3: // HPF
+    {
+      unsigned long now = millis();
+      if (now - lastToggle >= 1000)
+      {
+          lastToggle = now;
+          highOn = !highOn;
+          if (highOn) tone(SPKR, 1000);
+          else noTone(SPKR);
+      }
+      break;
+    }
+
+    default: // Normal
+      noTone(SPKR);
+      highOn = false;
+      break;
+  }
 } // setBreathRateAlarm()
 
 //**********************************************************************
@@ -443,11 +477,10 @@ void configureArduino(void)
 //**********************************************************************
 void WriteToSerial( int numValues, float dataArray[] )
 {
-
-  int index=0; 
-  for (index = 0; index < numValues; index++)
+  // int index = 0;
+  for (int index = 0; index < numValues; index++)
   {
-    if (index >0)
+    if (index > 0)
     {
       Serial.print('\t');
     }
