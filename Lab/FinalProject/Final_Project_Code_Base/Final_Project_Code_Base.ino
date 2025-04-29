@@ -1,23 +1,24 @@
 // Breathing Rate Detection System -- Final Integration
 //
 // Pieced together from code created by: Clark Hochgraf and David Orlicki Oct 18, 2018
-// Modified by: Mark Thompson April 2020 to integrate MATLAB read and Write 
+// Modified by: Mark Thompson April 2020 to integrate MATLAB read and Write
 //              and integrate the system
 
 #include <MsTimer2.h>
 #include <SPI.h>
+#include <Tone2.h>
 
 const int TSAMP_MSEC = 100;
 const int NUM_SAMPLES = 3600;
 const int NUM_SUBSAMPLES = 160;
 const int DAC0 = 3, DAC1 = 4, DAC2 = 5, LM61 = A0, VDITH = A1;
 const int V_REF = 5.0;
-const int SPKR = 12; // d12  PB4
+const int SPKR = 12;  // d12  PB4
 
 volatile boolean sampleFlag = false;
 
-const long DATA_FXPT = 1000; // Scale value to convert from float to fixed
-const float INV_FXPT = 1.0 / DATA_FXPT; // division slow: precalculate
+const long DATA_FXPT = 1000;             // Scale value to convert from float to fixed
+const float INV_DFXPT = 1.0 / DATA_FXPT;  // division slow: precalculate
 
 int nSmpl = 1, sample;
 
@@ -31,35 +32,40 @@ bool isToneEn = false;
 
 unsigned long startUsec, endUsec, execUsec;
 
+Tone toneT2;
+Tone toneT1;
+
 //  Define a structure to hold statistics values for each filter band
-struct stats_t
-{
+struct stats_t {
   int tick = 1;
   float mean, var, stdev;
 } statsLF, statsBF, statsHF;
 
 //**********************************************************************
-void setup()
-{
+void setup() {
   configureArduino();
-  Serial.begin(115200);delay(5);
+  Serial.begin(115200);
+  delay(5);
 
-   //Handshake with MATLAB 
+  //Handshake with MATLAB
   Serial.println(F("%Arduino Ready"));
-  while (Serial.read() != 'g'); // spin
+  while (Serial.read() != 'g')
+    ;  // spin
 
-  MsTimer2::set(TSAMP_MSEC, ISR_Sample); // Set sample msec, ISR name
-  MsTimer2::start(); // start running the Timer  
+  toneT2.begin(13);
+  toneT1.begin(SPKR);
+
+  MsTimer2::set(TSAMP_MSEC, ISR_Sample);  // Set sample msec, ISR name
+  MsTimer2::start();                      // start running the Timer
 }
 
 //**********************************************************************
-void loop()
-{
-  // syncSample();  // Wait for the interupt when actually reading ADC data
+void loop() {
+  syncSample();  // Wait for the interupt when actually reading ADC data
   // Breathing Rate Detection
   // Declare variables
   float readValue, floatOutput;  //  Input data from ADC after dither averaging or from MATLAB
-  long fxdInputValue;  
+  long fxdInputValue;
   long eqOutput;  //  Equalizer output
   int alarmCode;  //  Alarm code
 
@@ -84,20 +90,20 @@ void loop()
   fxdInputValue = long(DATA_FXPT * readValue + 0.5);
 
   //  Execute the equalizer
-  eqOutput = EqualizerFIR( fxdInputValue, loopTick );
-  
-  //  Execute the noise filter.  
-  eqOutput = NoiseFilter( eqOutput, loopTick );
+  eqOutput = EqualizerFIR(fxdInputValue, loopTick);
+
+  //  Execute the noise filter.
+  eqOutput = NoiseFilter(eqOutput, loopTick);
 
   //  Convert the output of the equalizer by scaling floating point
-  xv = float(eqOutput);
+  xv = float(eqOutput * INV_DFXPT);
 
   // Uncomment this when measuring execution times
   startUsec = micros();
 
   // Filter bank
-  yLF = IIR_LPF(xv); // second order systems cascade
-  yBF = IIR_BPF(xv);  
+  yLF = IIR_LPF(xv);  // second order systems cascade
+  yBF = IIR_BPF(xv);
   yHF = IIR_HPF(xv);
 
   // Determine which filter is active and its standard deviation
@@ -115,71 +121,98 @@ void loop()
 
   // Uncomment this when measuring execution times
   endUsec = micros();
-  execUsec = execUsec + (endUsec-startUsec);
+  execUsec = execUsec + (endUsec - startUsec);
 
-  //  Call the alarm check function to determine what breathing range 
-  alarmCode = AlarmCheck( stdLF, stdBF, stdHF );
-
-  if (alarmCode > 0) isToneEn = true;
-  else isToneEn = false;
+  //  Call the alarm check function to determine what breathing range
+  alarmCode = AlarmCheck(stdLF, stdBF, stdHF);
 
   //  Call the alarm function to turn on or off the tone
-  setAlarm( alarmCode, isToneEn );
+  setAlarm(alarmCode, isToneEn);
 
   // Check for equalized noise
   // printArray[1] = eqOutput;
 
-  printArray[0] = loopTick;     //  Sample Number
-  printArray[1] = readValue;    //  Input Data
-  printArray[2] = eqOutput;     // Equalizer Output
-  printArray[3] = yLF;          //  Raw Low Pass Filter
-  printArray[4] = yBF;          //  Raw Bandpass Filter
-  printArray[5] = yHF;          //  Raw High Pass Filter
-  printArray[6] = stdLF;        //  StdDev Low Pass Filter
-  printArray[7] = stdBF;     //  StdDev Bandpass Filter
-  printArray[8] = stdHF;     //  StdDev High Pass Filter
+  printArray[0] = loopTick;   //  Sample Number
+  printArray[1] = readValue;  //  Input Data
+  printArray[2] = eqOutput;   //  Equalizer Output
+  printArray[3] = yLF;        //  Raw Low Pass Filter
+  printArray[4] = yBF;        //  Raw Bandpass Filter
+  printArray[5] = yHF;        //  Raw High Pass Filter
+  printArray[6] = stdLF;      //  StdDev Low Pass Filter
+  printArray[7] = stdBF;      //  StdDev Bandpass Filter
+  printArray[8] = stdHF;      //  StdDev High Pass Filter
   printArray[9] = float(alarmCode);
 
-  numValues = 10;  // The number of columns to be sent to the serial monitor (or MATLAB)
-  WriteToSerial( numValues, printArray );  //  Write to the serial monitor (or MATLAB)
+  numValues = 10;                        // The number of columns to be sent to the serial monitor (or MATLAB)
+  WriteToSerial(numValues, printArray);  //  Write to the serial monitor (or MATLAB)
 
-  if (++loopTick >= NUM_SAMPLES)
-  {
+  if (++loopTick >= NUM_SAMPLES) {
     Serial.print("Average execution time (uSec) = ");
-    Serial.println( float(execUsec)/NUM_SAMPLES );
-    while(true); // spin forever
+    Serial.println(float(execUsec) / NUM_SAMPLES);
+    while (true)
+      ;  // spin forever
   }
-} // loop()
+}  // loop()
 
 //**********************************************************************
-int AlarmCheck( float stdLF, float stdBF, float stdHF)
-{
-  // if (stdLF > 400.0 && stdBF  400.0 && stdHF < 400.0) return 1; // Disconnect
-  if (stdLF > 60.0 || stdBF > 140.0 || stdHF > 200.0)
+int AlarmCheck(float stdLF, float stdBF, float stdHF) {
+  int aCode = 0;
+  float noiseThreshold = -0.05;
+
+  if (stdLF > noiseThreshold || stdBF > noiseThreshold || stdHF > noiseThreshold)
   {
-    if (stdLF > stdBF && stdLF > stdHF) return 2;
-    if (stdHF > stdBF && stdHF > stdLF) return 3;
-    return 0;
+      isToneEn = true;
+      if ((stdLF > stdBF) && (stdLF > stdHF))
+      {
+        //low breathing rate
+        aCode = 1;
+      }
+
+      else if ((stdBF > stdLF) && (stdBF > stdHF))
+      {
+        //normal breathing rate
+        aCode = 2;
+      }
+
+      else if ((stdHF > stdBF) && (stdHF > stdLF))
+      {
+        // High breathing state
+        aCode = 3;
+      }
+
+      else
+      {
+        //indeterminant state
+        aCode = 0;
+      }
   }
+  else
+  {
+    //non operational state
+    aCode = 4;
+  }
+  return aCode;
 }  // end AlarmCheck
 
 //**********************************************************************
 long EqualizerFIR(long xInput, int sampleNumber)
 {
   int i;
-  long yN = 0; //  Current output
+  long yN = 0; // Current output
   const int equalizerLength = 4;
   static long xN[equalizerLength] = {0};
-  long h[] = { 1, 1, -1, -1 };
+  long h[] = { 1, 1, -1, -1 }; // Impulse response of the equalizer
 
-  for (i = equalizerLength - 1; i >= 1; i--)
-  {
+  //  Update the xN array
+
+  for (i = equalizerLength - 1; i >= 1; i--) {
     xN[i] = xN[i - 1];
   }
 
   xN[0] = xInput;
 
-  for ( i = 0; i <= equalizerLength - 1; i++)
+  // Convolve the input with the impulse response
+  for (i = 0; i <= equalizerLength - 1; i++)
   {
     yN += h[i] * xN[i];
   }
@@ -198,293 +231,337 @@ long EqualizerFIR(long xInput, int sampleNumber)
 int NoiseFilter(long xInput, int sampleNumber) {
   // Filter Type: LPF
   const int Fc_bpm = 70;
-	// LPF FIR Filter Coefficients MFILT = 61, Fc = 70
-	const int HFXPT = 4096, MFILT = 61;
-	int h[] = {0, 2, 4, 4, 1, -4, -9, -10, -6, 5, 17, 24, 17, -4,
-	-30, -47, -41, -7, 43, 84, 87, 36, -56, -150, -188, -122, 65, 343,
-	641, 869, 954, 869, 641, 343, 65, -122, -188, -150, -56, 36, 87, 84,
-	43, -7, -41, -47, -30, -4, 17, 24, 17, 5, -6, -10, -9, -4,
-	1, 4, 4, 2, 0};
+  // LPF FIR Filter Coefficients MFILT = 61, Fc = 70
+  const int HFXPT = 4096, MFILT = 61;
+  int h[] = { 0, 2, 4, 4, 1, -4, -9, -10, -6, 5, 17, 24, 17, -4,
+              -30, -47, -41, -7, 43, 84, 87, 36, -56, -150, -188, -122, 65, 343,
+              641, 869, 954, 869, 641, 343, 65, -122, -188, -150, -56, 36, 87, 84,
+              43, -7, -41, -47, -30, -4, 17, 24, 17, 5, -6, -10, -9, -4,
+              1, 4, 4, 2, 0 };
 
   const float INV_HFXPT = 1.0 / HFXPT;
   static long xN[MFILT] = {xInput};
   long hv, accum = 0;
 
   // Right shift old xv values. Install new x in xv[0];
-  for (int i = (MFILT-1); i > 0; i--) xN[i] = xN[i-1]; xN[0] = xInput;
+  for (int i = (MFILT - 1); i > 0; i--) xN[i] = xN[i - 1];
+  xN[0] = xInput;
 
   // h[]*x[] overlap multiply-accumumlate
-  for (int i = 0; i < MFILT; i++)
-  {
-      hv = h[i]; // create 32 bit space
-      accum += hv*xN[MFILT-1-i];
+  for (int i = 0; i < MFILT; i++) {
+    hv = h[i];  // create 32 bit space
+    accum += hv * xN[MFILT - 1 - i];
   }
-  return (accum*INV_HFXPT);
+  return (accum * INV_HFXPT);
 }
 
 //**********************************************************************
-float IIR_LPF(float xv)
-{
+float IIR_LPF(float xv) {
   const int numStages = 3;
   static float G[numStages];
   static float b[numStages][3];
   static float a[numStages][3];
-  
+
   int stage;
   int i;
-  static float xM0[numStages] = {0.0}, xM1[numStages] = {0.0}, xM2[numStages] = {0.0};
-  static float yM0[numStages] = {0.0}, yM1[numStages] = {0.0}, yM2[numStages] = {0.0};
-  
+  static float xM0[numStages] = { 0.0 }, xM1[numStages] = { 0.0 }, xM2[numStages] = { 0.0 };
+  static float yM0[numStages] = { 0.0 }, yM1[numStages] = { 0.0 }, yM2[numStages] = { 0.0 };
+
   float yv = 0.0;
   unsigned long startTime;
-  
+
   G[0] = 0.0054630;
-  b[0][0] = 1.0000000; b[0][1] = 0.9990472; b[0][2]= 0.0000000;
-  a[0][0] = 1.0000000; a[0][1] =  -0.9554256; a[0][2] =  0.0000000;
+  b[0][0] = 1.0000000;
+  b[0][1] = 0.9990472;
+  b[0][2] = 0.0000000;
+  a[0][0] = 1.0000000;
+  a[0][1] = -0.9554256;
+  a[0][2] = 0.0000000;
   G[1] = 0.0054630;
-  b[1][0] = 1.0000000; b[1][1] = 2.0015407; b[1][2]= 1.0015416;
-  a[1][0] = 1.0000000; a[1][1] =  -1.9217194; a[1][2] =  0.9289864;
+  b[1][0] = 1.0000000;
+  b[1][1] = 2.0015407;
+  b[1][2] = 1.0015416;
+  a[1][0] = 1.0000000;
+  a[1][1] = -1.9217194;
+  a[1][2] = 0.9289864;
   G[2] = 0.0054630;
-  b[2][0] = 1.0000000; b[2][1] = 1.9994122; b[2][2]= 0.9994131;
-  a[2][0] = 1.0000000; a[2][1] =  -1.9562202; a[2][2] =  0.9723269;
-  
-  for (i =0; i<numStages; i++)
-  {
-    yM2[i] = yM1[i]; yM1[i] = yM0[i];  xM2[i] = xM1[i]; xM1[i] = xM0[i], xM0[i] = G[i]*xv;
-    yv = -a[i][2]*yM2[i] - a[i][1]*yM1[i] + b[i][2]*xM2[i] + b[i][1]*xM1[i] + b[i][0]*xM0[i];
+  b[2][0] = 1.0000000;
+  b[2][1] = 1.9994122;
+  b[2][2] = 0.9994131;
+  a[2][0] = 1.0000000;
+  a[2][1] = -1.9562202;
+  a[2][2] = 0.9723269;
+
+  for (i = 0; i < numStages; i++) {
+    yM2[i] = yM1[i];
+    yM1[i] = yM0[i];
+    xM2[i] = xM1[i];
+    xM1[i] = xM0[i], xM0[i] = G[i] * xv;
+    yv = -a[i][2] * yM2[i] - a[i][1] * yM1[i] + b[i][2] * xM2[i] + b[i][1] * xM1[i] + b[i][0] * xM0[i];
     yM0[i] = yv;
     xv = yv;
   }
-  
+
   return yv;
 }
 
 //**********************************************************************
-float IIR_BPF(float xv)
-{
+float IIR_BPF(float xv) {
   const int numStages = 5;
   static float G[numStages];
   static float b[numStages][3];
   static float a[numStages][3];
-  
+
   int stage;
   int i;
-  static float xM0[numStages] = {0.0}, xM1[numStages] = {0.0}, xM2[numStages] = {0.0};
-  static float yM0[numStages] = {0.0}, yM1[numStages] = {0.0}, yM2[numStages] = {0.0};
-  
+  static float xM0[numStages] = { 0.0 }, xM1[numStages] = { 0.0 }, xM2[numStages] = { 0.0 };
+  static float yM0[numStages] = { 0.0 }, yM1[numStages] = { 0.0 }, yM2[numStages] = { 0.0 };
+
   float yv = 0.0;
   unsigned long startTime;
 
   G[0] = 0.1005883;
-  b[0][0] = 1.0000000; b[0][1] = -0.0002347; b[0][2]= -0.9992038;
-  a[0][0] = 1.0000000; a[0][1] =  -1.7797494; a[0][2] =  0.8889605;
+  b[0][0] = 1.0000000;
+  b[0][1] = -0.0002347;
+  b[0][2] = -0.9992038;
+  a[0][0] = 1.0000000;
+  a[0][1] = -1.7797494;
+  a[0][2] = 0.8889605;
   G[1] = 0.1005883;
-  b[1][0] = 1.0000000; b[1][1] = 2.0008350; b[1][2]= 1.0008352;
-  a[1][0] = 1.0000000; a[1][1] =  -1.8483239; a[1][2] =  0.8984289;
+  b[1][0] = 1.0000000;
+  b[1][1] = 2.0008350;
+  b[1][2] = 1.0008352;
+  a[1][0] = 1.0000000;
+  a[1][1] = -1.8483239;
+  a[1][2] = 0.8984289;
   G[2] = 0.1005883;
-  b[2][0] = 1.0000000; b[2][1] = 1.9996805; b[2][2]= 0.9996808;
-  a[2][0] = 1.0000000; a[2][1] =  -1.9241023; a[2][2] =  0.9473604;
+  b[2][0] = 1.0000000;
+  b[2][1] = 1.9996805;
+  b[2][2] = 0.9996808;
+  a[2][0] = 1.0000000;
+  a[2][1] = -1.9241023;
+  a[2][2] = 0.9473604;
   G[3] = 0.1005883;
-  b[3][0] = 1.0000000; b[3][1] = -2.0004549; b[3][2]= 1.0004550;
-  a[3][0] = 1.0000000; a[3][1] =  -1.7805039; a[3][2] =  0.9515924;
+  b[3][0] = 1.0000000;
+  b[3][1] = -2.0004549;
+  b[3][2] = 1.0004550;
+  a[3][0] = 1.0000000;
+  a[3][1] = -1.7805039;
+  a[3][2] = 0.9515924;
   G[4] = 0.1005883;
-  b[4][0] = 1.0000000; b[4][1] = -1.9998259; b[4][2]= 0.9998260;
-  a[4][0] = 1.0000000; a[4][1] =  -1.9696094; a[4][2] =  0.9850368;
-  
-  for (i =0; i<numStages; i++)
-    {
-      yM2[i] = yM1[i]; yM1[i] = yM0[i]; xM2[i] = xM1[i]; xM1[i] = xM0[i], xM0[i] = G[i]*xv;
-      yv = -a[i][2]*yM2[i] - a[i][1]*yM1[i] + b[i][2]*xM2[i] + b[i][1]*xM1[i] + b[i][0]*xM0[i];
-      yM0[i] = yv;
-      xv = yv;
-    }
-  
+  b[4][0] = 1.0000000;
+  b[4][1] = -1.9998259;
+  b[4][2] = 0.9998260;
+  a[4][0] = 1.0000000;
+  a[4][1] = -1.9696094;
+  a[4][2] = 0.9850368;
+
+  for (i = 0; i < numStages; i++) {
+    yM2[i] = yM1[i];
+    yM1[i] = yM0[i];
+    xM2[i] = xM1[i];
+    xM1[i] = xM0[i], xM0[i] = G[i] * xv;
+    yv = -a[i][2] * yM2[i] - a[i][1] * yM1[i] + b[i][2] * xM2[i] + b[i][1] * xM1[i] + b[i][0] * xM0[i];
+    yM0[i] = yv;
+    xv = yv;
+  }
+
   return yv;
 }
 
 //**********************************************************************
-float IIR_HPF(float xv)
-{
+float IIR_HPF(float xv) {
   const int numStages = 3;
   static float G[numStages];
   static float b[numStages][3];
   static float a[numStages][3];
-  
+
   int stage;
   int i;
-  static float xM0[numStages] = {0.0}, xM1[numStages] = {0.0}, xM2[numStages] = {0.0};
-  static float yM0[numStages] = {0.0}, yM1[numStages] = {0.0}, yM2[numStages] = {0.0};
-  
+  static float xM0[numStages] = { 0.0 }, xM1[numStages] = { 0.0 }, xM2[numStages] = { 0.0 };
+  static float yM0[numStages] = { 0.0 }, yM1[numStages] = { 0.0 }, yM2[numStages] = { 0.0 };
+
   float yv = 0.0;
   unsigned long startTime;
-  
+
   G[0] = 0.7527548;
-  b[0][0] = 1.0000000; b[0][1] = -1.0012325; b[0][2]= 0.0000000;
-  a[0][0] = 1.0000000; a[0][1] =  -0.2605136; a[0][2] =  0.0000000;
+  b[0][0] = 1.0000000;
+  b[0][1] = -1.0012325;
+  b[0][2] = 0.0000000;
+  a[0][0] = 1.0000000;
+  a[0][1] = -0.2605136;
+  a[0][2] = 0.0000000;
   G[1] = 0.7527548;
-  b[1][0] = 1.0000000; b[1][1] = -1.9980085; b[1][2]= 0.9980100;
-  a[1][0] = 1.0000000; a[1][1] =  -1.3350294; a[1][2] =  0.6145423;
+  b[1][0] = 1.0000000;
+  b[1][1] = -1.9980085;
+  b[1][2] = 0.9980100;
+  a[1][0] = 1.0000000;
+  a[1][1] = -1.3350294;
+  a[1][2] = 0.6145423;
   G[2] = 0.7527548;
-  b[2][0] = 1.0000000; b[2][1] = -2.0007590; b[2][2]= 1.0007605;
-  a[2][0] = 1.0000000; a[2][1] =  -1.7555162; a[2][2] =  0.9156503;
-  
-  for (i = 0; i < numStages; i++)
-    {
-      yM2[i] = yM1[i]; yM1[i] = yM0[i]; xM2[i] = xM1[i]; xM1[i] = xM0[i], xM0[i] = G[i]*xv;
-      yv = -a[i][2]*yM2[i] - a[i][1]*yM1[i] + b[i][2]*xM2[i] + b[i][1]*xM1[i] + b[i][0]*xM0[i];
-      yM0[i] = yv;
-      xv = yv;
-    }
-  
+  b[2][0] = 1.0000000;
+  b[2][1] = -2.0007590;
+  b[2][2] = 1.0007605;
+  a[2][0] = 1.0000000;
+  a[2][1] = -1.7555162;
+  a[2][2] = 0.9156503;
+
+  for (i = 0; i < numStages; i++) {
+    yM2[i] = yM1[i];
+    yM1[i] = yM0[i];
+    xM2[i] = xM1[i];
+    xM1[i] = xM0[i], xM0[i] = G[i] * xv;
+    yv = -a[i][2] * yM2[i] - a[i][1] * yM1[i] + b[i][2] * xM2[i] + b[i][1] * xM1[i] + b[i][0] * xM0[i];
+    yM0[i] = yv;
+    xv = yv;
+  }
+
   return yv;
 }
 
 //**********************************************************************
-void getStats(float xv, stats_t &s, bool reset)
-{
+void getStats(float xv, stats_t &s, bool reset) {
   float oldMean, oldVar;
-  
-  if (reset == true)
-  {
-    s.stdev = sqrt(s.var/s.tick);
+
+  if (reset == true) {
+    s.stdev = sqrt(s.var / s.tick);
     s.tick = 1;
     s.mean = xv;
-    s.var = 0.0;  
-  }
-  else
-  {
+    s.var = 0.0;
+  } else {
     oldMean = s.mean;
-    s.mean = oldMean + (xv - oldMean)/(s.tick+1);
-    oldVar = s.var; 
-    s.var = oldVar + (xv - oldMean)*(xv - s.mean);      
+    s.mean = oldMean + (xv - oldMean) / (s.tick + 1);
+    oldVar = s.var;
+    s.var = oldVar + (xv - oldMean) * (xv - s.mean);
   }
-  s.tick++;  
+  s.tick++;
 }
 
 //**********************************************************************
-float analogReadDitherAve(void)
-{ 
+float analogReadDitherAve(void) {
   float sum = 0.0;
-  for (int i = 0; i < NUM_SUBSAMPLES; i++)
-  {
-    digitalWrite(DAC0, (i & B00000001)); // LSB bit mask
+  for (int i = 0; i < NUM_SUBSAMPLES; i++) {
+    digitalWrite(DAC0, (i & B00000001));  // LSB bit mask
     digitalWrite(DAC1, (i & B00000010));
-    digitalWrite(DAC2, (i & B00000100)); // MSB bit mask
+    digitalWrite(DAC2, (i & B00000100));  // MSB bit mask
     sum += analogRead(LM61);
   }
-  return sum/NUM_SUBSAMPLES; // averaged subsamples 
+  return sum / NUM_SUBSAMPLES;  // averaged subsamples
 }
 
 //**********************************************************************
 void setAlarm(int aCode, boolean isToneEn)
 {
-  if (!isToneEn) { noTone(SPKR); return; }
+  if (!isToneEn) { toneT1.stop(); return; }
 
   static unsigned long lastToggle = 0;
   static bool highOn = false;
 
   switch (aCode)
   {
-    case 1: // Disconnected
-      tone(SPKR, 200);
+    case 1:  // LPF
+      toneT1.play(400);
       break;
 
-    case 2: // LPF
-      tone(SPKR, 400);
+    case 2:  // Normal
+      toneT1.stop();
+      highOn = false;
       break;
 
-    case 3: // HPF
+    case 3:  // HPF
     {
       unsigned long now = millis();
       if (now - lastToggle >= 1000)
       {
-          lastToggle = now;
-          highOn = !highOn;
-          if (highOn) tone(SPKR, 1000);
-          else noTone(SPKR);
+        lastToggle = now;
+        highOn = !highOn;
+        if (highOn) toneT1.play(1000);
+        else toneT1.stop();
       }
       break;
     }
 
-    default: // Normal
-      noTone(SPKR);
+    case 4:  // Disconnected
+      toneT1.play(200);
+      break;
+
+    default: // Unknown
+      toneT1.stop();
       highOn = false;
       break;
   }
-} // setBreathRateAlarm()
+}
 
 //**********************************************************************
-float testVector(void)
-{
+float testVector(void) {
   // Variable rate sinusoidal input
   // Specify segment frequencies in bpm.
   // Test each frequency for nominally 60 seconds.
   // Adjust segment intervals for nearest integer cycle count.
-    
+
   const int NUM_BAND = 6;
-  const float CAL_FBPM = 10.0, CAL_AMP = 2.0; 
-  
-  const float FBPM[NUM_BAND] = {5.0, 10.0, 15.0, 20.0, 30.0, 70.0}; // LPF test
-  static float bandAmp[NUM_BAND] = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  const float CAL_FBPM = 10.0, CAL_AMP = 2.0;
+
+  const float FBPM[NUM_BAND] = { 5.0, 10.0, 15.0, 20.0, 30.0, 70.0 };  // LPF test
+  static float bandAmp[NUM_BAND] = { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
 
   //  Determine the number of samples (around 600 ) that will give you an even number
-  //  of full cycles of the sinewave.  This is done to avoid a large discontinuity 
+  //  of full cycles of the sinewave.  This is done to avoid a large discontinuity
   //  between bands.  This forces the sinewave in each band to end near a value of zer
-  
-  static int bandTick = int(int(FBPM[0]+0.5)*(600/FBPM[0]));
-  static int simTick = 0, band = 0;
-  static float Fc = FBPM[0]/600, cycleAmp = bandAmp[0];
 
-  //for (int i = 0; i < NUM_BAND; i++) bandAmp[i] = CAL_AMP*(CAL_FBPM/FBPM[i]);  
+  static int bandTick = int(int(FBPM[0] + 0.5) * (600 / FBPM[0]));
+  static int simTick = 0, band = 0;
+  static float Fc = FBPM[0] / 600, cycleAmp = bandAmp[0];
+
+  //for (int i = 0; i < NUM_BAND; i++) bandAmp[i] = CAL_AMP*(CAL_FBPM/FBPM[i]);
 
   //  Check to see if the simulation tick has exceeded the number of tick in each band.
   //  If it has then switch to the next frequency (band) again computing how many
   //  ticks to go through to end up at the end of a cycle.
-  
-  if ((simTick >= bandTick) && (FBPM[band] > 0.0))
-  {
+
+  if ((simTick >= bandTick) && (FBPM[band] > 0.0)) {
 
     //  The simTick got to the end of the band cycle.  Go to the next frequency
     simTick = 0;
     band++;
-    Fc = FBPM[band]/600.0;
+    Fc = FBPM[band] / 600.0;
     cycleAmp = bandAmp[band];
-    bandTick = int(int(FBPM[band]+0.5)*(600/FBPM[band]));
+    bandTick = int(int(FBPM[band] + 0.5) * (600 / FBPM[band]));
   }
- 
-  float degC = 0.0; // DC offset
-  degC += cycleAmp*sin(TWO_PI*Fc*simTick++);  
+
+  float degC = 0.0;  // DC offset
+  degC += cycleAmp * sin(TWO_PI * Fc * simTick++);
   //degC += 1.0*(tick/100.0); // drift: degC / 10sec
   //degC += 0.1*((random(0,101)-50.0)/29.0); // stdev scaled from 1.0
   return degC;
 }
 
 //**********************************************************************
-void configureArduino(void)
-{
-  pinMode(DAC0,OUTPUT); digitalWrite(DAC0,LOW);
-  pinMode(DAC1,OUTPUT); digitalWrite(DAC1,LOW);
-  pinMode(DAC2,OUTPUT); digitalWrite(DAC2,LOW);
+void configureArduino(void) {
+  pinMode(DAC0, OUTPUT);
+  digitalWrite(DAC0, LOW);
+  pinMode(DAC1, OUTPUT);
+  digitalWrite(DAC1, LOW);
+  pinMode(DAC2, OUTPUT);
+  digitalWrite(DAC2, LOW);
 
-  pinMode(SPKR, OUTPUT); digitalWrite(SPKR,LOW);
+  pinMode(SPKR, OUTPUT);
+  digitalWrite(SPKR, LOW);
 
 
-  analogReference(INTERNAL); // DEFAULT, INTERNAL
-  analogRead(LM61); // read and discard to prime ADC registers
-  Serial.begin(115200); // 11 char/msec 
+  analogReference(INTERNAL);  // DEFAULT, INTERNAL
+  analogRead(LM61);           // read and discard to prime ADC registers
+  Serial.begin(115200);       // 11 char/msec
 }
 
 //**********************************************************************
-void WriteToSerial( int numValues, float dataArray[] )
-{
+void WriteToSerial(int numValues, float dataArray[]) {
   // int index = 0;
-  for (int index = 0; index < numValues; index++)
-  {
-    if (index > 0)
-    {
+  for (int index = 0; index < numValues; index++) {
+    if (index > 0) {
       Serial.print('\t');
     }
-      Serial.print(dataArray[index], DEC);
+    Serial.print(dataArray[index], DEC);
   }
 
   Serial.print('\n');
@@ -493,8 +570,7 @@ void WriteToSerial( int numValues, float dataArray[] )
 }  // end WriteToMATLAB
 
 //**********************************************************************
-float ReadFromMATLAB()
-{
+float ReadFromMATLAB() {
   int charCount;
   bool readComplete = false;
   char inputString[80], inChar;
@@ -504,34 +580,30 @@ float ReadFromMATLAB()
 
   readComplete = false;
   charCount = 0;
-  while ( !readComplete )
-  {
-    while ( Serial.available() <= 0);
+  while (!readComplete) {
+    while (Serial.available() <= 0)
+      ;
     inChar = Serial.read();
 
-    if ( inChar == '\n' )
-    {
+    if (inChar == '\n') {
       readComplete = true;
-    }
-    else
-    {
+    } else {
       inputString[charCount++] = inChar;
     }
   }
   inputString[charCount] = 0;
   return atof(inputString);
 
-} // end ReadFromMATLAB
+}  // end ReadFromMATLAB
 
 //**********************************************************************
-void syncSample(void)
-{
-  while (sampleFlag == false); // spin until ISR trigger
-  sampleFlag = false;          // disarm flag: enforce dwell  
+void syncSample(void) {
+  while (sampleFlag == false)
+    ;                  // spin until ISR trigger
+  sampleFlag = false;  // disarm flag: enforce dwell
 }
 
 //**********************************************************************
-void ISR_Sample()
-{
+void ISR_Sample() {
   sampleFlag = true;
 }
