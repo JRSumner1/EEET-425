@@ -235,36 +235,30 @@ long EqualizerFIR(long xInput, int sampleNumber)
 //*******************************************************************
 int NoiseFilter(long xInput, int sampleNumber)
 {
-  //CHEBY low, order 5, R = 0.5, 70 BPM
+  // Filter Type: LPF
+  const int Fc_bpm = 70;
+  // LPF FIR Filter Coefficients MFILT = 61, Fc = 70
+  const int HFXPT = 4096, MFILT = 61;
+  int h[] = { 0, 2, 4, 4, 1, -4, -9, -10, -6, 5, 17, 24, 17, -4,
+              -30, -47, -41, -7, 43, 84, 87, 36, -56, -150, -188, -122, 65, 343,
+              641, 869, 954, 869, 641, 343, 65, -122, -188, -150, -56, 36, 87, 84,
+              43, -7, -41, -47, -30, -4, 17, 24, 17, 5, -6, -10, -9, -4,
+              1, 4, 4, 2, 0 };
 
-  const int MFILT = 6;
-  static float GAIN = 0.00816033;
-  static float b[] = {0.1000000, 0.5000000, 1.0000000, 1.0000000, 0.5000000, 0.1000000};
-  static float a[] = {1.0000000, -3.5596819, 5.5972100, -4.7578789, 2.1711919, -0.4247281};
+  const float INV_HFXPT = 1.0 / HFXPT;
+  static long xN[MFILT] = {xInput};
+  long hv, accum = 0;
 
-  //---------------------------------------------------------------
-  //  Two arrays to contain the input and output sequences in time
-  static float xM[MFILT] = {0.0}, yM[MFILT] = {0.0};
+  // Right shift old xv values. Install new x in xv[0];
+  for (int i = (MFILT - 1); i > 0; i--) xN[i] = xN[i - 1];
+  xN[0] = xInput;
 
-  //  Shift the input and output values in time by one sample, then bring in the
-  //  next sample
-  for (int i = MFILT - 1; i > 0; i--) // shift x, y histories
-  {
-    yM[i] = yM[i - 1];
-    xM[i] = xM[i - 1];
+  // h[]*x[] overlap multiply-accumumlate
+  for (int i = 0; i < MFILT; i++) {
+    hv = h[i];  // create 32 bit space
+    accum += hv * xN[MFILT - 1 - i];
   }
-  xM[0] = GAIN * xInput; // insert new input
-  yM[0] = 0.0;       // init output accumulator
-
-  //  Execute the IIR filter by multiplying each output historical value by the
-  //  a ( the numerator) coefficients and each new input value by the b (the
-  //  denominator) coefficients.
-
-  for (int i = MFILT - 1; i > 0; i--)
-    yM[0] += (-a[i] * yM[i] + b[i] * xM[i]);
-
-  // Update the output with the newest value xM[0] times b[0]
-  return (yM[0] += b[0] * xM[0]);
+  return (accum * INV_HFXPT);
 }
 
 //*******************************************************************
